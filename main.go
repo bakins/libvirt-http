@@ -9,6 +9,17 @@ import (
 	"strings"
 )
 
+var stateDict = map[uint8]string{
+	libvirt.VIR_DOMAIN_NOSTATE:     "nostate",
+	libvirt.VIR_DOMAIN_RUNNING:     "running",
+	libvirt.VIR_DOMAIN_BLOCKED:     "blocked",
+	libvirt.VIR_DOMAIN_PAUSED:      "paused",
+	libvirt.VIR_DOMAIN_SHUTDOWN:    "shutdown",
+	libvirt.VIR_DOMAIN_CRASHED:     "crashed",
+	libvirt.VIR_DOMAIN_PMSUSPENDED: "suspended",
+	libvirt.VIR_DOMAIN_SHUTOFF:     "shutoff",
+}
+
 type (
 	DiskDriver struct {
 		Name string `xml:"name,attr" json:"name"`
@@ -140,6 +151,13 @@ func buildDomain(dom *libvirt.VirDomain) (*Domain, error) {
 		return nil, err
 	}
 
+	state, err := d.GetState()
+	if err != nil {
+		return nil, err
+	}
+
+	d.State = stateDict[uint8(state[0])]
+
 	runtime.SetFinalizer(d, func(d *Domain) {
 		d.Free()
 	})
@@ -169,22 +187,36 @@ func getDomain(c *Context, d *Domain) error {
 	return nil
 }
 
-func destroyDomain(c *Context, d *Domain) error {
-	err := d.Destroy()
-	if err != nil {
-		return c.JSONError(500, err)
-	}
-	c.JSON(200, d)
-	return nil
-}
+func domainAction(action string) gin.HandlerFunc {
+	return domainHandler(func(c *Context, d *Domain) error {
+		var err error
+		switch action {
 
-func createDomain(c *Context, d *Domain) error {
-	err := d.Create()
-	if err != nil {
-		return c.JSONError(500, err)
-	}
-	c.JSON(200, d)
-	return nil
+		case "destroy":
+			err = d.Destroy()
+
+		case "create":
+			err = d.Create()
+
+		case "reboot":
+			err = d.Reboot(0)
+
+		case "resume":
+			err = d.Resume()
+
+		case "suspend":
+			err = d.Suspend()
+
+		case "shutdown":
+			err = d.Shutdown()
+
+		}
+		if err != nil {
+			return c.JSONError(500, err)
+		}
+		c.JSON(200, d)
+		return nil
+	})
 }
 
 func domainHandler(fn func(*Context, *Domain) error) gin.HandlerFunc {
@@ -262,8 +294,10 @@ func main() {
 	{
 		domains.GET("", withContext(listDomains))
 		domains.GET(":name", domainHandler(getDomain))
-		domains.POST(":name/destroy", domainHandler(destroyDomain))
-		domains.POST(":name/create", domainHandler(createDomain))
+
+		for _, action := range []string{"destroy", "create", "reboot", "resume", "suspend", "shutdown"} {
+			domains.POST(fmt.Sprintf(":name/%s", action), domainAction(action))
+		}
 	}
 
 	// Listen and server on 0.0.0.0:8080
