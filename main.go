@@ -220,41 +220,24 @@ func domainAction(action string) gin.HandlerFunc {
 }
 
 func domainHandler(fn func(*Context, *Domain) error) gin.HandlerFunc {
-	return gin.HandlerFunc(func(c *gin.Context) {
-		v, err := libvirt.NewVirConnection("qemu:///system")
-		if err != nil {
-			c.Abort(500)
-		}
-		defer v.CloseConnection()
-		ctx := &Context{
-			Context:  c,
-			V:        &v,
-			freelist: make([]Freer, 0),
-		}
-		defer func() {
-			for _, f := range ctx.freelist {
-				f.Free()
-			}
-		}()
+	return withContext(func(c *Context) error {
 		name := c.Params.ByName("name")
-		dom, err := v.LookupDomainByName(name)
-
+		dom, err := c.V.LookupDomainByName(name)
 		if err != nil {
 			code := 500
 			if strings.Contains(err.Error(), "Domain not found") {
 				code = 404
 			}
-			ctx.JSONError(code, err)
-			return
+			return c.JSONError(code, err)
 		}
 		d, err := buildDomain(&dom)
 		if err != nil {
-			ctx.JSONError(500, err)
-			return
+			return c.JSONError(500, err)
 		}
 		defer d.Free()
-		fn(ctx, d)
+		return fn(c, d)
 	})
+
 }
 
 func withContext(fn HandlerFunc) gin.HandlerFunc {
