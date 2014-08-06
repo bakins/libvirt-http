@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"github.com/alexzorin/libvirt-go"
@@ -76,8 +77,8 @@ type (
 	}
 
 	Device struct {
-		Disks      []Disk      `xml:"disk" json:"disks"`
-		Interfaces []Interface `xml:"interface" json:"interfaces"`
+		Disks      []Disk      `xml:"disk,omitempty" json:"disks,omitempty"`
+		Interfaces []Interface `xml:"interface,omitempty" json:"interfaces,omitempty"`
 	}
 
 	OsType struct {
@@ -102,9 +103,9 @@ type (
 		UUID               string   `xml:"uuid" json:"uuid"`
 		Name               string   `xml:"name" json:"name"`
 		Memory             int      `xml:"memory" json:"memory"`
-		VCPU               int      `xml:"vcpu" json:"vpcu"`
+		VCPU               int      `xml:"vcpu" json:"vcpu"`
 		Devices            Device   `xml:"devices,omitempty" json:"devices"`
-		Os                 Os       `xml:"os,omitempty" json:"os"`
+		Os                 Os       `xml:"os,omitempty" json:"os,omitempty"`
 		domain             *libvirt.VirDomain
 		State              string `xml:"-" json:"state"`
 	}
@@ -138,8 +139,16 @@ func (c *Context) FreeList(f Freer) {
 	c.freelist = append(c.freelist, f)
 }
 
-func buildDomain(dom *libvirt.VirDomain) (*Domain, error) {
+func newDomain() *Domain {
 	d := new(Domain)
+	runtime.SetFinalizer(d, func(d *Domain) {
+		d.Free()
+	})
+	return d
+}
+
+func buildDomain(dom *libvirt.VirDomain) (*Domain, error) {
+	d := newDomain()
 	d.VirDomain = dom
 
 	xmldesc, err := d.GetXMLDesc(0)
@@ -158,9 +167,6 @@ func buildDomain(dom *libvirt.VirDomain) (*Domain, error) {
 
 	d.State = stateDict[uint8(state[0])]
 
-	runtime.SetFinalizer(d, func(d *Domain) {
-		d.Free()
-	})
 	return d, nil
 }
 
@@ -210,6 +216,9 @@ func domainAction(action string) gin.HandlerFunc {
 		case "shutdown":
 			err = d.Shutdown()
 
+		case "undefine":
+			err = d.Undefine()
+
 		}
 		if err != nil {
 			return c.JSONError(500, err)
@@ -217,6 +226,37 @@ func domainAction(action string) gin.HandlerFunc {
 		c.JSON(200, d)
 		return nil
 	})
+}
+
+func defineDomain(c *Context) error {
+	input := Domain{}
+	err := json.NewDecoder(c.Request.Body).Decode(&input)
+	if err != nil {
+		return c.JSONError(400, err)
+	}
+
+	fmt.Printf("%+v\n", input)
+
+	data, err := xml.MarshalIndent(input, "  ", "    ")
+	if err != nil {
+		return c.JSONError(417, err)
+	}
+
+	fmt.Println(string(data))
+
+	dom, err := c.V.DomainDefineXML(string(data))
+	if err != nil {
+		return c.JSONError(500, err)
+	}
+
+	d, err := buildDomain(&dom)
+	if err != nil {
+		return c.JSONError(500, err)
+	}
+	c.FreeList(d)
+
+	c.JSON(200, d)
+	return nil
 }
 
 func domainHandler(fn func(*Context, *Domain) error) gin.HandlerFunc {
@@ -275,10 +315,12 @@ func main() {
 
 	domains := r.Group("/domains")
 	{
+
+		domains.POST("", withContext(defineDomain))
 		domains.GET("", withContext(listDomains))
 		domains.GET(":name", domainHandler(getDomain))
 
-		for _, action := range []string{"destroy", "create", "reboot", "resume", "suspend", "shutdown"} {
+		for _, action := range []string{"destroy", "create", "reboot", "resume", "suspend", "shutdown", "undefine"} {
 			domains.POST(fmt.Sprintf(":name/%s", action), domainAction(action))
 		}
 	}
