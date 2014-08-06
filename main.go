@@ -95,6 +95,7 @@ type (
 		Devices            Device   `xml:"devices,omitempty" json:"devices"`
 		Os                 Os       `xml:"os,omitempty" json:"os"`
 		domain             *libvirt.VirDomain
+		State              string `xml:"-" json:"state"`
 	}
 
 	ErrorMsg struct {
@@ -168,9 +169,17 @@ func getDomain(c *Context, d *Domain) error {
 	return nil
 }
 
-// TODO: need a withDomain helper
 func destroyDomain(c *Context, d *Domain) error {
 	err := d.Destroy()
+	if err != nil {
+		return c.JSONError(500, err)
+	}
+	c.JSON(200, d)
+	return nil
+}
+
+func createDomain(c *Context, d *Domain) error {
+	err := d.Create()
 	if err != nil {
 		return c.JSONError(500, err)
 	}
@@ -252,9 +261,9 @@ func main() {
 	domains := r.Group("/domains")
 	{
 		domains.GET("", withContext(listDomains))
-		//domains.GET(":name", withContext(getDomain))
 		domains.GET(":name", domainHandler(getDomain))
 		domains.POST(":name/destroy", domainHandler(destroyDomain))
+		domains.POST(":name/create", domainHandler(createDomain))
 	}
 
 	// Listen and server on 0.0.0.0:8080
