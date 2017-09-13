@@ -284,7 +284,7 @@ func withContext(fn HandlerFunc) gin.HandlerFunc {
 	return gin.HandlerFunc(func(c *gin.Context) {
 		v, err := libvirt.NewVirConnection("qemu:///system")
 		if err != nil {
-			c.Abort(500)
+			c.Abort()
 		}
 		defer v.CloseConnection()
 
